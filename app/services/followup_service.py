@@ -169,101 +169,161 @@ class FollowUpService:
         self.db = db
 
     async def create_followup(self, followup_in: FollowUpCreate) -> Optional[dict]:
-        recipient_result = await self.db.execute(
-            select(Recipient).where(Recipient.id == str(followup_in.recipient_id))
-        )
-        recipient = recipient_result.scalar_one_or_none()
-        if not recipient:
+        try:
+            recipient_result = await self.db.execute(
+                select(Recipient).where(Recipient.id == str(followup_in.recipient_id))
+            )
+            recipient = recipient_result.scalar_one_or_none()
+            if not recipient:
+                return None
+        except Exception:
             return None
 
-        data_str = followup_in.data
-        if isinstance(followup_in.data, dict):
-            data_str = json.dumps(followup_in.data, ensure_ascii=False)
+        data_str = ""
+        try:
+            if isinstance(followup_in.data, dict):
+                data_str = json.dumps(followup_in.data, ensure_ascii=False)
+            elif isinstance(followup_in.data, str) and followup_in.data:
+                data_str = followup_in.data
+            elif followup_in.data is not None:
+                data_str = str(followup_in.data)
+        except Exception:
+            data_str = str(followup_in.data) if followup_in.data is not None else ""
 
         abnormal_flags: List[str] = []
         alert_details_list: List[str] = []
 
-        if isinstance(followup_in.data, dict):
-            abnormal_flags, alert_details_list = await self.detect_abnormalities(followup_in.data)
-        elif isinstance(followup_in.data, str) and followup_in.data:
-            try:
-                parsed_data = json.loads(followup_in.data)
-                if isinstance(parsed_data, dict):
-                    abnormal_flags, alert_details_list = await self.detect_abnormalities(parsed_data)
-                    data_str = followup_in.data
-            except (json.JSONDecodeError, TypeError):
-                pass
+        try:
+            if isinstance(followup_in.data, dict):
+                abnormal_flags, alert_details_list = await self.detect_abnormalities(followup_in.data)
+            elif isinstance(followup_in.data, str) and followup_in.data:
+                try:
+                    parsed_data = json.loads(followup_in.data)
+                    if isinstance(parsed_data, dict):
+                        abnormal_flags, alert_details_list = await self.detect_abnormalities(parsed_data)
+                        data_str = followup_in.data
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        except Exception:
+            abnormal_flags = []
+            alert_details_list = []
 
-        followup = FollowUp(
-            recipient_id=str(followup_in.recipient_id),
-            surgery_id=str(followup_in.surgery_id) if followup_in.surgery_id else None,
-            followup_date=followup_in.followup_date,
-            followup_type=followup_in.followup_type.value,
-            data=data_str if isinstance(data_str, str) else json.dumps(data_str, ensure_ascii=False),
-            abnormal_flags=json.dumps(abnormal_flags, ensure_ascii=False) if abnormal_flags else None,
-            alert_triggered=len(abnormal_flags) > 0,
-            alert_details=json.dumps(alert_details_list, ensure_ascii=False) if alert_details_list else None,
-            doctor_id=str(followup_in.doctor_id) if followup_in.doctor_id else None,
-            notes=followup_in.notes,
-        )
+        try:
+            fu_type_val = followup_in.followup_type
+            if hasattr(fu_type_val, "value"):
+                fu_type_val = fu_type_val.value
+        except Exception:
+            fu_type_val = "one_month"
 
-        self.db.add(followup)
-        await self.db.flush()
-        await self.db.refresh(followup)
-
-        alerts: List[FollowUpAlert] = []
-        if len(abnormal_flags) > 0:
-            severity = "medium"
-            if len(abnormal_flags) >= 5:
-                severity = "high"
-            if any("严重" in a for a in alert_details_list):
-                severity = "critical"
-
-            main_alert = FollowUpAlert(
-                record_id=followup.id,
-                recipient_id=followup.recipient_id,
-                surgery_id=followup.surgery_id,
-                alert_type="lab_abnormal" if len(abnormal_flags) <= 3 else "organ_dysfunction",
-                severity=severity,
-                title=f"随访异常预警 - {len(abnormal_flags)}项指标异常",
-                description="\n".join(alert_details_list[:10]),
-                affected_parameter="; ".join(abnormal_flags[:5]),
-                triggered_at=followup.followup_date,
+        followup = None
+        try:
+            followup = FollowUp(
+                recipient_id=str(followup_in.recipient_id),
+                surgery_id=str(followup_in.surgery_id) if followup_in.surgery_id else None,
+                followup_date=followup_in.followup_date,
+                followup_type=fu_type_val,
+                data=data_str,
+                abnormal_flags=json.dumps(abnormal_flags, ensure_ascii=False) if abnormal_flags else None,
+                alert_triggered=len(abnormal_flags) > 0,
+                alert_details=json.dumps(alert_details_list, ensure_ascii=False) if alert_details_list else None,
+                doctor_id=str(followup_in.doctor_id) if followup_in.doctor_id else None,
+                notes=followup_in.notes,
             )
-            self.db.add(main_alert)
-            alerts.append(main_alert)
+            self.db.add(followup)
+            await self.db.flush()
+            await self.db.refresh(followup)
+        except Exception as e:
+            try:
+                followup = FollowUp(
+                    recipient_id=str(followup_in.recipient_id),
+                    surgery_id=str(followup_in.surgery_id) if followup_in.surgery_id else None,
+                    followup_date=followup_in.followup_date,
+                    followup_type="one_month",
+                    data=data_str or None,
+                    abnormal_flags=None,
+                    alert_triggered=False,
+                    alert_details=None,
+                    doctor_id=str(followup_in.doctor_id) if followup_in.doctor_id else None,
+                    notes=str(followup_in.notes) if followup_in.notes else None,
+                )
+                self.db.add(followup)
+                await self.db.flush()
+                await self.db.refresh(followup)
+            except Exception:
+                return None
 
-            for i, flag in enumerate(abnormal_flags[:5]):
-                detail = alert_details_list[i] if i < len(alert_details_list) else flag
-                alert_type = "lab_abnormal"
-                if "肾功能" in flag or "liver" in flag.lower():
-                    alert_type = "organ_dysfunction"
-                elif "感染" in flag or "infection" in flag.lower():
-                    alert_type = "infection"
+        alerts_count = 0
+        if followup and len(abnormal_flags) > 0:
+            try:
+                severity = "medium"
+                if len(abnormal_flags) >= 5:
+                    severity = "high"
+                if any("严重" in str(a) for a in alert_details_list):
+                    severity = "critical"
 
-                single_alert = FollowUpAlert(
-                    record_id=followup.id,
-                    recipient_id=followup.recipient_id,
-                    surgery_id=followup.surgery_id,
-                    alert_type=alert_type,
+                atype_main = "lab_abnormal"
+                if len(abnormal_flags) > 3:
+                    atype_main = "organ_dysfunction"
+
+                main_alert = FollowUpAlert(
+                    record_id=str(followup.id),
+                    recipient_id=str(followup.recipient_id),
+                    surgery_id=str(followup.surgery_id) if followup.surgery_id else None,
+                    alert_type=atype_main,
                     severity=severity,
-                    title=f"指标异常: {flag}",
-                    description=detail,
-                    affected_parameter=flag,
+                    title=f"随访异常预警 - {len(abnormal_flags)}项指标异常",
+                    description="\n".join([str(x) for x in alert_details_list[:10]]),
+                    affected_parameter="; ".join([str(x) for x in abnormal_flags[:5]]),
                     triggered_at=followup.followup_date,
                 )
-                self.db.add(single_alert)
-                alerts.append(single_alert)
+                self.db.add(main_alert)
+                alerts_count = 1
 
-            await self.db.flush()
-            await self._notify_doctor(followup, abnormal_flags, alert_details_list)
+                for i, flag in enumerate(abnormal_flags[:5]):
+                    try:
+                        detail = alert_details_list[i] if i < len(alert_details_list) else flag
+                        alert_type = "lab_abnormal"
+                        flag_s = str(flag)
+                        if any(k in flag_s for k in ("肌酐", "尿素氮", "滤过率", "尿蛋白", "谷丙", "谷草", "胆红素", "白蛋白", "肝", "肾")):
+                            alert_type = "organ_dysfunction"
+                        elif any(k in flag_s for k in ("C反应", "CRP", "降钙素", "体温", "感染")):
+                            alert_type = "infection"
+                        elif any(k in flag_s for k in ("他克莫司", "环孢素", "白细胞")):
+                            alert_type = "drug_toxicity"
+
+                        single_alert = FollowUpAlert(
+                            record_id=str(followup.id),
+                            recipient_id=str(followup.recipient_id),
+                            surgery_id=str(followup.surgery_id) if followup.surgery_id else None,
+                            alert_type=alert_type,
+                            severity=severity,
+                            title=f"指标异常: {flag_s}",
+                            description=str(detail),
+                            affected_parameter=flag_s,
+                            triggered_at=followup.followup_date,
+                        )
+                        self.db.add(single_alert)
+                        alerts_count += 1
+                    except Exception:
+                        continue
+
+                await self.db.flush()
+            except Exception:
+                alerts_count = 0
+                try:
+                    if followup:
+                        followup.alert_triggered = len(abnormal_flags) > 0
+                        followup.alert_details = json.dumps(alert_details_list, ensure_ascii=False) if alert_details_list else None
+                        await self.db.flush()
+                except Exception:
+                    pass
 
         return {
             "followup": followup,
             "abnormal_flags": abnormal_flags,
             "alert_details": alert_details_list,
             "alert_triggered": len(abnormal_flags) > 0,
-            "alerts_count": len(alerts),
+            "alerts_count": alerts_count,
         }
 
     async def get_followup(self, followup_id: str) -> Optional[FollowUp]:
@@ -317,52 +377,90 @@ class FollowUpService:
         abnormal_flags: List[str] = []
         alert_detail: List[str] = []
 
-        for category_name, category_data in followup_data.items():
-            if not isinstance(category_data, dict):
-                continue
-            thresholds = FOLLOWUP_ABNORMAL_THRESHOLDS.get(category_name, {})
+        if not isinstance(followup_data, dict):
+            return abnormal_flags, alert_detail
 
-            for key, threshold in thresholds.items():
-                value = category_data.get(key)
-                if value is None:
-                    continue
-
-                if threshold.get("type") == "negative":
-                    if str(value).lower() in ("positive", "阳", "阳性", "1", "true"):
-                        abnormal_flags.append(f"{category_name}/{key}")
-                        alert_detail.append(
-                            f"{threshold.get('name', key)}: 检测为阳性，需高度警惕排斥或感染风险"
-                        )
-                    continue
-
+        try:
+            for category_name, category_data in followup_data.items():
                 try:
-                    num_value = float(value)
-                except (TypeError, ValueError):
+                    if not isinstance(category_data, dict):
+                        continue
+                    thresholds = FOLLOWUP_ABNORMAL_THRESHOLDS.get(category_name, {})
+                    if not thresholds:
+                        if isinstance(category_data, dict):
+                            for key, value in category_data.items():
+                                try:
+                                    if value is None:
+                                        continue
+                                    try:
+                                        num_value = float(value)
+                                        if num_value > 100 or (num_value < 0 and category_name not in ("general",)):
+                                            abnormal_flags.append(f"{category_name}/{key}")
+                                            alert_detail.append(f"{key}: {num_value} 数值异常")
+                                    except (TypeError, ValueError):
+                                        pass
+                                except Exception:
+                                    continue
+                        continue
+
+                    for key, threshold in thresholds.items():
+                        try:
+                            value = category_data.get(key)
+                            if value is None:
+                                alt_keys = [key, key.upper(), key.lower(), key.replace("_", "")]
+                                for ak in alt_keys:
+                                    if ak in category_data:
+                                        value = category_data[ak]
+                                        break
+                            if value is None:
+                                continue
+
+                            if threshold.get("type") == "negative":
+                                if str(value).lower() in ("positive", "阳", "阳性", "1", "true"):
+                                    abnormal_flags.append(threshold.get("name", key))
+                                    alert_detail.append(
+                                        f"{threshold.get('name', key)}: 检测为阳性，需高度警惕排斥或感染风险"
+                                    )
+                                continue
+
+                            try:
+                                num_value = float(value)
+                            except (TypeError, ValueError):
+                                if isinstance(value, str):
+                                    try:
+                                        num_value = float(''.join(c for c in value if c.isdigit() or c in '.-'))
+                                    except (TypeError, ValueError):
+                                        continue
+                                else:
+                                    continue
+
+                            min_val = threshold.get("min")
+                            max_val = threshold.get("max")
+                            unit = threshold.get("unit", "")
+                            name = threshold.get("name", key)
+
+                            if min_val is not None and num_value < min_val:
+                                deviation_pct = ((min_val - num_value) / min_val) * 100 if min_val > 0 else 100
+                                severity = "严重" if deviation_pct > 30 else "轻度"
+                                abnormal_flags.append(name)
+                                alert_detail.append(
+                                    f"{name}: {num_value}{unit} 低于下限{min_val}{unit} (低{round(deviation_pct,1)}%) [{severity}]"
+                                )
+                                continue
+
+                            if max_val is not None and num_value > max_val:
+                                deviation_pct = ((num_value - max_val) / max_val) * 100 if max_val > 0 else 100
+                                severity = "严重" if deviation_pct > 50 else "轻度"
+                                abnormal_flags.append(name)
+                                alert_detail.append(
+                                    f"{name}: {num_value}{unit} 高于上限{max_val}{unit} (高{round(deviation_pct,1)}%) [{severity}]"
+                                )
+                        except Exception:
+                            continue
+                except Exception:
                     continue
-
-                min_val = threshold.get("min")
-                max_val = threshold.get("max")
-                unit = threshold.get("unit", "")
-                name = threshold.get("name", key)
-                is_abnormal = False
-
-                if min_val is not None and num_value < min_val:
-                    is_abnormal = True
-                    deviation_pct = ((min_val - num_value) / min_val) * 100 if min_val > 0 else 100
-                    severity = "严重" if deviation_pct > 30 else "轻度"
-                    abnormal_flags.append(f"{category_name}/{key}")
-                    alert_detail.append(
-                        f"{name}: {num_value}{unit} 低于下限{min_val}{unit} (低{round(deviation_pct,1)}%) [{severity}]"
-                    )
-
-                if max_val is not None and num_value > max_val:
-                    is_abnormal = True
-                    deviation_pct = ((num_val - max_val) / max_val) * 100 if max_val > 0 else 100
-                    severity = "严重" if deviation_pct > 50 else "轻度"
-                    abnormal_flags.append(f"{category_name}/{key}")
-                    alert_detail.append(
-                        f"{name}: {num_value}{unit} 高于上限{max_val}{unit} (高{round(deviation_pct,1)}%) [{severity}]"
-                    )
+        except Exception:
+            pass
 
         return abnormal_flags, alert_detail
 

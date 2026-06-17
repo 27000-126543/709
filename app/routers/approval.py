@@ -146,17 +146,25 @@ class ApprovalRouterService:
             }
         return None
 
-    async def process_action(self, data: ApprovalAction) -> Optional[Approval]:
+    async def process_action(self, data: ApprovalAction) -> Optional[dict]:
         approval = await self.get_approval(data.approval_id)
         if not approval:
             return None
 
         timeout_result = await self._auto_escalate_if_timeout(approval)
         if timeout_result:
-            raise HTTPException(
-                status_code=409,
-                detail=timeout_result["message"],
-            )
+            return {
+                "timeout": True,
+                "auto_escalated": True,
+                "status": "timeout_escalated",
+                "message": timeout_result["message"],
+                "original_approval_id": timeout_result["original_approval_id"],
+                "original_level": timeout_result["original_level"],
+                "next_approval_id": timeout_result["next_approval_id"],
+                "next_level": timeout_result["next_level"],
+                "next_timeout": timeout_result["next_timeout"],
+                "allocation_status_unchanged": True,
+            }
 
         if approval.status != "pending":
             raise HTTPException(status_code=400, detail=f"审批状态为 {approval.status}，无法操作")
@@ -215,7 +223,12 @@ class ApprovalRouterService:
 
         await self.db.flush()
         await self.db.refresh(approval)
-        return approval
+        return {
+            "timeout": False,
+            "auto_escalated": False,
+            "status": approval.status,
+            "approval": approval,
+        }
 
     async def escalate(self, data: ApprovalEscalation) -> Approval:
         approval = await self.get_approval(data.approval_id)
@@ -316,10 +329,39 @@ async def process_approval_action(
     db: AsyncSession = Depends(get_db),
 ):
     service = ApprovalRouterService(db)
-    approval = await service.process_action(data)
-    if not approval:
+    result = await service.process_action(data)
+    if not result:
         raise HTTPException(status_code=404, detail="审批不存在")
-    return {"code": 200, "message": "操作完成", "data": ApprovalResponse.model_validate(approval)}
+
+    if result.get("timeout"):
+        return {
+            "code": 409,
+            "message": result.get("message", "审批已超时自动转交"),
+            "data": {
+                "timeout": True,
+                "auto_escalated": True,
+                "status": "timeout_escalated",
+                "original_approval_id": result.get("original_approval_id"),
+                "original_level": result.get("original_level"),
+                "next_approval_id": result.get("next_approval_id"),
+                "next_level": result.get("next_level"),
+                "next_timeout": result.get("next_timeout"),
+                "allocation_status_unchanged": True,
+                "hint": "该分配审批已自动转交国家级，请在待办列表中查找新的国家级审批任务",
+            },
+        }
+
+    approval = result.get("approval")
+    return {
+        "code": 200,
+        "message": "操作完成",
+        "data": {
+            "timeout": False,
+            "auto_escalated": False,
+            "status": approval.status if approval else result.get("status"),
+            "approval": ApprovalResponse.model_validate(approval) if approval else None,
+        },
+    }
 
 
 @router.post("/escalate")

@@ -71,9 +71,15 @@ class ReplenishmentRequestUpdate(BaseModel):
     status: Optional[ReplenishmentStatus] = None
     approved_quantity: Optional[int] = Field(None, gt=0)
     approver_id: Optional[str] = Field(None, max_length=36)
+    approver_name: Optional[str] = None
     approval_notes: Optional[str] = None
-    actual_arrival_date: Optional[datetime] = None
+    received_date: Optional[datetime] = None
+    received_quantity: Optional[int] = Field(None, gt=0)
+    received_by: Optional[str] = None
     actual_quantity: Optional[int] = Field(None, gt=0)
+    actual_arrival_date: Optional[datetime] = None
+    batch_number: Optional[str] = None
+    arrival_notes: Optional[str] = None
 
 
 class OutboundQuotaCreate(BaseModel):

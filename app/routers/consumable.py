@@ -28,12 +28,60 @@ class ConsumableRouterService:
 
     async def create_consumable(self, data: ConsumableCreate) -> Consumable:
         consumable = Consumable(**data.model_dump(exclude_none=True))
-        consumable.status = "normal"
-        consumable.replenishment_status = "none"
-        consumable.outbound_quota_locked = 0
+        consumable.outbound_quota_locked = consumable.outbound_quota_locked or 0
+        consumable.replenishment_status = consumable.replenishment_status or "none"
+        if not consumable.status:
+            consumable.status = "normal"
         self.db.add(consumable)
         await self.db.flush()
         await self.db.refresh(consumable)
+
+        try:
+            available = (consumable.stock_quantity or 0) - (consumable.outbound_quota_locked or 0)
+            safety_level = consumable.safety_stock_level or 0
+
+            if available < safety_level and safety_level > 0:
+                if available <= safety_level * 0.3:
+                    consumable.status = "critical"
+                else:
+                    consumable.status = "low"
+
+                existing = await self.db.execute(
+                    select(ReplenishmentRequest).where(
+                        ReplenishmentRequest.consumable_id == consumable.id,
+                        ReplenishmentRequest.status.in_(["submitted", "under_review", "approved", "ordered", "shipped", "partially_received"]),
+                    )
+                )
+                if not existing.scalar_one_or_none():
+                    replenish_qty = int(max(safety_level * 3 - available, safety_level))
+                    urgency = "routine"
+                    if available <= safety_level * 0.3:
+                        urgency = "emergency"
+                    elif available <= safety_level * 0.6:
+                        urgency = "urgent"
+
+                    request = ReplenishmentRequest(
+                        consumable_id=consumable.id,
+                        request_code=f"AUTO-{datetime.utcnow().strftime('%Y%m%d')}-{__import__('uuid').uuid4().hex[:8].upper()}",
+                        requested_quantity=replenish_qty,
+                        current_stock=consumable.stock_quantity,
+                        safety_stock=consumable.safety_stock_level,
+                        urgency_level=urgency,
+                        supplier=consumable.supplier,
+                        estimated_cost=float(replenish_qty) * float(consumable.unit_price or 0),
+                        status="submitted",
+                        requested_by="auto_system",
+                        requested_by_id="system_auto",
+                        notes=f"安全库存自动补货: 现有{consumable.stock_quantity}{consumable.unit or ''}, 安全水位{safety_level}{consumable.unit or ''}, 可用{available}{consumable.unit or ''}",
+                    )
+                    self.db.add(request)
+                    consumable.replenishment_request_id = request.id
+                    consumable.replenishment_status = "replenishing"
+                    await self.db.flush()
+                    await self.db.refresh(consumable)
+        except Exception:
+            pass
+
         return consumable
 
     async def get_consumable(self, consumable_id: str) -> Optional[Consumable]:
@@ -161,27 +209,84 @@ class ConsumableRouterService:
         if not request:
             return None
 
-        update_data = data.model_dump(exclude_unset=True)
-        for key, value in update_data.items():
-            setattr(request, key, value)
+        received_qty = data.received_quantity or data.actual_quantity
 
-        if data.status == "received" and data.received_quantity:
-            consumable = await self.get_consumable(request.consumable_id)
-            if consumable:
-                consumable.stock_quantity += data.received_quantity
-                consumable.replenishment_status = "completed"
-                if consumable.stock_quantity >= consumable.safety_stock_level:
-                    consumable.status = "normal"
-                else:
-                    consumable.status = "low"
-                transaction = ConsumableTransaction(
-                    consumable_id=request.consumable_id,
-                    transaction_type="replenishment",
-                    quantity=data.received_quantity,
-                    reference_id=str(request.id),
-                    notes=f"补货入库, 申请单ID: {request.id}",
+        if data.status == "received" and received_qty:
+            if request.status not in ("ordered", "shipped", "approved", "partially_received"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"当前申请状态为 '{request.status}'，无法确认到货",
                 )
-                self.db.add(transaction)
+
+            consumable = await self.get_consumable(request.consumable_id)
+            if not consumable:
+                raise HTTPException(status_code=404, detail="耗材不存在")
+
+            request.status = "received"
+            request.received_quantity = (request.received_quantity or 0) + received_qty
+            request.received_date = data.received_date or data.actual_arrival_date or datetime.utcnow()
+            request.received_by = data.received_by or request.received_by
+            if data.arrival_notes:
+                request.notes = (request.notes or "") + f"\n到货备注: {data.arrival_notes}"
+            if data.batch_number:
+                request.notes = (request.notes or "") + f"\n批次号: {data.batch_number}"
+
+            consumable.stock_quantity = (consumable.stock_quantity or 0) + received_qty
+
+            available = consumable.stock_quantity - (consumable.outbound_quota_locked or 0)
+            safety_level = consumable.safety_stock_level or 0
+
+            if available >= safety_level:
+                consumable.status = "normal"
+                consumable.replenishment_status = "completed"
+                consumable.replenishment_request_id = None
+            else:
+                consumable.status = "low"
+                consumable.replenishment_status = "partially"
+
+            transaction = ConsumableTransaction(
+                consumable_id=request.consumable_id,
+                transaction_type="replenishment",
+                quantity=received_qty,
+                reference_id=str(request.id),
+                notes=f"补货入库, 申请单: {request.request_code or request.id}, 批次: {data.batch_number or '-'}",
+            )
+            self.db.add(transaction)
+        else:
+            update_data = data.model_dump(exclude_unset=True)
+            for key, value in update_data.items():
+                if key in ("received_quantity", "actual_quantity", "received_date", "actual_arrival_date",
+                           "received_by", "batch_number", "arrival_notes"):
+                    continue
+                setattr(request, key, value)
+
+            if data.status == "approved" and request.status in ("submitted", "under_review"):
+                request.approved_by = data.approver_name or request.approved_by
+                request.approved_at = datetime.utcnow()
+                if data.approval_notes:
+                    request.notes = (request.notes or "") + f"\n审批备注: {data.approval_notes}"
+
+                consumable = await self.get_consumable(request.consumable_id)
+                if consumable:
+                    consumable.replenishment_status = "approved"
+
+            if data.status == "rejected" and request.status in ("submitted", "under_review"):
+                request.rejected_at = datetime.utcnow()
+                if data.approval_notes:
+                    request.rejection_reason = data.approval_notes
+
+                consumable = await self.get_consumable(request.consumable_id)
+                if consumable:
+                    consumable.replenishment_status = "none"
+                    consumable.replenishment_request_id = None
+                    available = (consumable.stock_quantity or 0) - (consumable.outbound_quota_locked or 0)
+                    safety_level = consumable.safety_stock_level or 0
+                    if available < safety_level * 0.3:
+                        consumable.status = "critical"
+                    elif available < safety_level:
+                        consumable.status = "low"
+                    else:
+                        consumable.status = "normal"
 
         await self.db.flush()
         await self.db.refresh(request)
