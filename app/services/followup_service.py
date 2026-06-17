@@ -5,7 +5,7 @@ from typing import Optional, List, Tuple, Dict
 from datetime import datetime, timedelta, date
 import json
 
-from app.models import FollowUp, Recipient, Surgery
+from app.models import FollowUp, FollowUpAlert, Recipient, Surgery
 from app.schemas.followup import FollowUpCreate
 from app.schemas.common import FollowUpType
 
@@ -168,7 +168,7 @@ class FollowUpService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def create_followup(self, followup_in: FollowUpCreate) -> Optional[FollowUp]:
+    async def create_followup(self, followup_in: FollowUpCreate) -> Optional[dict]:
         recipient_result = await self.db.execute(
             select(Recipient).where(Recipient.id == str(followup_in.recipient_id))
         )
@@ -181,10 +181,18 @@ class FollowUpService:
             data_str = json.dumps(followup_in.data, ensure_ascii=False)
 
         abnormal_flags: List[str] = []
-        alert_detail: List[str] = []
+        alert_details_list: List[str] = []
 
         if isinstance(followup_in.data, dict):
-            abnormal_flags, alert_detail = await self.detect_abnormalities(followup_in.data)
+            abnormal_flags, alert_details_list = await self.detect_abnormalities(followup_in.data)
+        elif isinstance(followup_in.data, str) and followup_in.data:
+            try:
+                parsed_data = json.loads(followup_in.data)
+                if isinstance(parsed_data, dict):
+                    abnormal_flags, alert_details_list = await self.detect_abnormalities(parsed_data)
+                    data_str = followup_in.data
+            except (json.JSONDecodeError, TypeError):
+                pass
 
         followup = FollowUp(
             recipient_id=str(followup_in.recipient_id),
@@ -194,8 +202,8 @@ class FollowUpService:
             data=data_str if isinstance(data_str, str) else json.dumps(data_str, ensure_ascii=False),
             abnormal_flags=json.dumps(abnormal_flags, ensure_ascii=False) if abnormal_flags else None,
             alert_triggered=len(abnormal_flags) > 0,
-            alert_details=json.dumps(alert_detail, ensure_ascii=False) if alert_detail else None,
-            doctor_id=str(followup_in.doctor_id),
+            alert_details=json.dumps(alert_details_list, ensure_ascii=False) if alert_details_list else None,
+            doctor_id=str(followup_in.doctor_id) if followup_in.doctor_id else None,
             notes=followup_in.notes,
         )
 
@@ -203,10 +211,60 @@ class FollowUpService:
         await self.db.flush()
         await self.db.refresh(followup)
 
+        alerts: List[FollowUpAlert] = []
         if len(abnormal_flags) > 0:
-            await self._notify_doctor(followup, abnormal_flags, alert_detail)
+            severity = "medium"
+            if len(abnormal_flags) >= 5:
+                severity = "high"
+            if any("严重" in a for a in alert_details_list):
+                severity = "critical"
 
-        return followup
+            main_alert = FollowUpAlert(
+                record_id=followup.id,
+                recipient_id=followup.recipient_id,
+                surgery_id=followup.surgery_id,
+                alert_type="lab_abnormal" if len(abnormal_flags) <= 3 else "organ_dysfunction",
+                severity=severity,
+                title=f"随访异常预警 - {len(abnormal_flags)}项指标异常",
+                description="\n".join(alert_details_list[:10]),
+                affected_parameter="; ".join(abnormal_flags[:5]),
+                triggered_at=followup.followup_date,
+            )
+            self.db.add(main_alert)
+            alerts.append(main_alert)
+
+            for i, flag in enumerate(abnormal_flags[:5]):
+                detail = alert_details_list[i] if i < len(alert_details_list) else flag
+                alert_type = "lab_abnormal"
+                if "肾功能" in flag or "liver" in flag.lower():
+                    alert_type = "organ_dysfunction"
+                elif "感染" in flag or "infection" in flag.lower():
+                    alert_type = "infection"
+
+                single_alert = FollowUpAlert(
+                    record_id=followup.id,
+                    recipient_id=followup.recipient_id,
+                    surgery_id=followup.surgery_id,
+                    alert_type=alert_type,
+                    severity=severity,
+                    title=f"指标异常: {flag}",
+                    description=detail,
+                    affected_parameter=flag,
+                    triggered_at=followup.followup_date,
+                )
+                self.db.add(single_alert)
+                alerts.append(single_alert)
+
+            await self.db.flush()
+            await self._notify_doctor(followup, abnormal_flags, alert_details_list)
+
+        return {
+            "followup": followup,
+            "abnormal_flags": abnormal_flags,
+            "alert_details": alert_details_list,
+            "alert_triggered": len(abnormal_flags) > 0,
+            "alerts_count": len(alerts),
+        }
 
     async def get_followup(self, followup_id: str) -> Optional[FollowUp]:
         result = await self.db.execute(

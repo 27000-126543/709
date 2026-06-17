@@ -25,62 +25,11 @@ class FollowUpRouterService:
         self.db = db
         self.service = FollowUpService(db) if FollowUpService else None
 
-    async def create_followup(self, data: FollowUpCreate) -> FollowUpRecord:
-        recipient_result = await self.db.execute(
-            select(Recipient).where(Recipient.id == data.recipient_id)
-        )
-        if not recipient_result.scalar_one_or_none():
+    async def create_followup(self, data: FollowUpCreate) -> dict:
+        result = await self.service.create_followup(data)
+        if not result:
             raise HTTPException(status_code=404, detail="受赠者不存在")
-
-        abnormal_flags = data.abnormal_flags
-        alert_triggered = False
-        alert_detail = ""
-
-        if abnormal_flags:
-            try:
-                flags = abnormal_flags if isinstance(abnormal_flags, list) else []
-                if len(flags) > 0:
-                    alert_triggered = True
-                    alert_detail = f"异常指标: {', '.join(flags)}"
-            except Exception:
-                pass
-
-        followup = FollowUpRecord(
-            recipient_id=data.recipient_id,
-            surgery_id=data.surgery_id,
-            followup_date=data.followup_date,
-            followup_type=data.followup_type,
-            data=data.data,
-            abnormal_flags=data.abnormal_flags,
-            alert_triggered=alert_triggered,
-            alert_detail=alert_detail,
-            doctor_id=data.doctor_id,
-            notes=data.notes,
-        )
-        self.db.add(followup)
-
-        if alert_triggered:
-            recipient = recipient_result.scalar_one_or_none()
-            alert = FollowUpAlert(
-                followup_id="",
-                recipient_id=data.recipient_id,
-                recipient_name=recipient.name if recipient else "",
-                alert_type="abnormal_lab",
-                alert_detail=alert_detail,
-                alert_time=datetime.utcnow(),
-                abnormal_items=abnormal_flags if isinstance(abnormal_flags, list) else [],
-                severity="warning",
-                resolved=False,
-            )
-            self.db.add(alert)
-
-        await self.db.flush()
-        await self.db.refresh(followup)
-
-        if alert_triggered:
-            alert.followup_id = str(followup.id)
-
-        return followup
+        return result
 
     async def get_followup(self, followup_id: str) -> Optional[FollowUpRecord]:
         result = await self.db.execute(
@@ -139,42 +88,9 @@ class FollowUpRouterService:
 
     async def create_detailed_record(
         self, data: FollowUpRecordCreate
-    ) -> FollowUpRecord:
-        recipient_result = await self.db.execute(
-            select(Recipient).where(Recipient.id == data.recipient_id)
-        )
-        recipient = recipient_result.scalar_one_or_none()
-        if not recipient:
-            raise HTTPException(status_code=404, detail="受赠者不存在")
-
-        abnormal_items: List[str] = []
-
-        lab_results = data.lab_results or {}
-        for test_name, test_value in lab_results.items():
-            if isinstance(test_value, dict):
-                status = test_value.get("status", "")
-                if status in ("abnormal", "high", "low", "critical"):
-                    abnormal_items.append(test_name)
-
-        imaging_results = data.imaging_results or {}
-        for img_name, img_value in imaging_results.items():
-            if isinstance(img_value, dict):
-                finding = img_value.get("finding", "")
-                if "异常" in finding or "病变" in finding:
-                    abnormal_items.append(f"影像-{img_name}")
-
-        biopsy_results = data.biopsy_results or {}
-        for bx_name, bx_value in biopsy_results.items():
-            if isinstance(bx_value, dict):
-                result_val = bx_value.get("result", "")
-                if "排斥" in result_val or "异常" in result_val:
-                    abnormal_items.append(f"活检-{bx_name}")
-
-        adverse_events = data.adverse_events or []
-        abnormal_items.extend(adverse_events)
-
-        data_str = ""
+    ) -> dict:
         try:
+            import json
             data_dict = {
                 "visit_type": data.visit_type,
                 "vital_signs": data.vital_signs,
@@ -184,56 +100,24 @@ class FollowUpRouterService:
                 "medication_adherence": data.medication_adherence,
                 "adverse_events": data.adverse_events,
                 "doctor_assessment": data.doctor_assessment,
-                "next_followup_date": data.next_followup_date.isoformat() if data.next_followup_date else None,
             }
-            import json
-            data_str = json.dumps(data_dict, ensure_ascii=False)
-        except Exception:
-            data_str = str(data.doctor_assessment or "")
+            if data.next_followup_date:
+                data_dict["next_followup_date"] = data.next_followup_date.isoformat()
 
-        alert_triggered = len(abnormal_items) > 0
-        alert_detail = ""
-        if alert_triggered:
-            alert_detail = f"异常项目: {', '.join(abnormal_items[:10])}"
-            if len(abnormal_items) > 10:
-                alert_detail += f" 等{len(abnormal_items)}项"
-
-        followup = FollowUpRecord(
-            recipient_id=data.recipient_id,
-            surgery_id=data.surgery_id,
-            followup_date=data.followup_date,
-            followup_type=data.followup_type,
-            data=data_str,
-            abnormal_fields=str(abnormal_items) if abnormal_items else None,
-            alert_triggered=alert_triggered,
-            alert_detail=alert_detail,
-            doctor_id=data.doctor_id,
-            notes=data.notes,
-        )
-        self.db.add(followup)
-
-        if alert_triggered:
-            recipient = recipient_result.scalar_one_or_none()
-            alert = FollowUpAlert(
-                followup_id="",
+            from app.schemas.followup import FollowUpCreate as FC
+            from app.schemas.common import FollowUpType as FUT
+            followup_create = FC(
                 recipient_id=data.recipient_id,
-                recipient_name=recipient.name if recipient else "",
-                alert_type="abnormal_followup",
-                alert_detail=alert_detail,
-                alert_time=datetime.utcnow(),
-                abnormal_items=abnormal_items,
-                severity="warning" if len(abnormal_items) < 5 else "critical",
-                resolved=False,
+                surgery_id=data.surgery_id,
+                followup_date=data.followup_date,
+                followup_type=data.followup_type,
+                data=data_dict,
+                doctor_id=data.doctor_id,
+                notes=data.notes,
             )
-            self.db.add(alert)
-
-        await self.db.flush()
-        await self.db.refresh(followup)
-
-        if alert_triggered:
-            alert.followup_id = str(followup.id)
-
-        return followup
+            return await self.service.create_followup(followup_create)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"创建随访记录失败: {str(e)}")
 
     async def list_alerts(
         self,
@@ -275,13 +159,25 @@ class FollowUpRouterService:
         return alert
 
 
-@router.post("", response_model=FollowUpResponse)
+@router.post("")
 async def create_followup(
     data: FollowUpCreate,
     db: AsyncSession = Depends(get_db),
 ):
     service = FollowUpRouterService(db)
-    return await service.create_followup(data)
+    result = await service.create_followup(data)
+    followup = result["followup"]
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "followup": FollowUpResponse.model_validate(followup),
+            "abnormal_flags": result["abnormal_flags"],
+            "alert_details": result["alert_details"],
+            "alert_triggered": result["alert_triggered"],
+            "alerts_count": result["alerts_count"],
+        },
+    }
 
 
 @router.get("/{followup_id}", response_model=FollowUpResponse)
@@ -357,8 +253,21 @@ async def create_detailed_followup(
     db: AsyncSession = Depends(get_db),
 ):
     service = FollowUpRouterService(db)
-    followup = await service.create_detailed_record(data)
-    return {"code": 200, "message": "随访记录已创建", "data": FollowUpResponse.model_validate(followup)}
+    result = await service.create_detailed_record(data)
+    if not result:
+        raise HTTPException(status_code=404, detail="受赠者不存在")
+    followup = result["followup"]
+    return {
+        "code": 200,
+        "message": "随访记录已创建",
+        "data": {
+            "followup": FollowUpResponse.model_validate(followup),
+            "abnormal_flags": result["abnormal_flags"],
+            "alert_details": result["alert_details"],
+            "alert_triggered": result["alert_triggered"],
+            "alerts_count": result["alerts_count"],
+        },
+    }
 
 
 @router.get("/alerts/list")
