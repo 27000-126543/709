@@ -43,15 +43,15 @@ class RecipientUpdate(BaseModel):
     hla_typing: Optional[str] = None
     pra_level: Optional[float] = Field(None, ge=0, le=100)
     pra_antibodies: Optional[str] = None
-    organ_type_needed: OrganType
-    urgency_level: UrgencyLevel
+    organ_type_needed: Optional[OrganType] = None
+    urgency_level: Optional[UrgencyLevel] = None
     waiting_since: Optional[datetime] = None
     province: Optional[str] = Field(None, max_length=50)
     city: Optional[str] = Field(None, max_length=50)
     hospital: Optional[str] = Field(None, max_length=200)
     transplant_center_id: Optional[str] = Field(None, max_length=36)
     doctor_id: Optional[str] = Field(None, max_length=36)
-    status: RecipientStatus] = None
+    status: Optional[RecipientStatus] = None
 
 
 class RecipientResponse(BaseModel):
@@ -67,7 +67,7 @@ class RecipientResponse(BaseModel):
     pra_level: Optional[float] = None
     pra_antibodies: Optional[str] = None
     organ_type_needed: OrganType
-    urgency_level: UrgencyLevel = UrgencyLevel.routine
+    urgency_level: UrgencyLevel
     waiting_since: Optional[datetime] = None
     province: Optional[str] = None
     city: Optional[str] = None
