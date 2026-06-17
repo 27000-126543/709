@@ -17,7 +17,7 @@ class ApprovalCreate(BaseModel):
     approver_id: str = Field(..., max_length=36)
     approver_name: str = Field(..., max_length=100)
     approver_role: str = Field(..., max_length=100)
-    timeout_hours: int = Field(24, gt=0)
+    timeout_hours: int = Field(2, gt=0)
 
 
 class ApprovalAction(BaseModel):
@@ -55,4 +55,4 @@ class ApprovalEscalation(BaseModel):
     escalated_to_name: str = Field(..., max_length=100)
     escalated_to_role: str = Field(..., max_length=100)
     reason: str
-    additional_timeout_hours: Optional[int] = Field(24, gt=0)
+    additional_timeout_hours: Optional[int] = Field(2, gt=0)

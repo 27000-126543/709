@@ -41,6 +41,7 @@ class Approval(Base):
     assigned_at = Column(DateTime, nullable=True)
     decided_at = Column(DateTime, nullable=True)
     deadline_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow() + timedelta(hours=2))
+    timeout_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow() + timedelta(hours=2))
     timeout_hours = Column(Integer, nullable=False, default=2)
     auto_escalate = Column(Boolean, nullable=False, default=True)
     escalated = Column(Boolean, default=False)

@@ -194,7 +194,7 @@ class FollowUpService:
             data=data_str if isinstance(data_str, str) else json.dumps(data_str, ensure_ascii=False),
             abnormal_flags=json.dumps(abnormal_flags, ensure_ascii=False) if abnormal_flags else None,
             alert_triggered=len(abnormal_flags) > 0,
-            alert_detail=json.dumps(alert_detail, ensure_ascii=False) if alert_detail else None,
+            alert_details=json.dumps(alert_detail, ensure_ascii=False) if alert_detail else None,
             doctor_id=str(followup_in.doctor_id),
             notes=followup_in.notes,
         )

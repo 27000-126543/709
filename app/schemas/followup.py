@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Optional, Any
+from typing import Optional, Any, Union
 from datetime import datetime
+import json
 
 from app.schemas.common import (
     FollowUpType,
@@ -14,7 +15,7 @@ class FollowUpCreate(BaseModel):
     surgery_id: Optional[str] = Field(None, max_length=36)
     followup_date: datetime
     followup_type: FollowUpType = FollowUpType.routine
-    data: Optional[str] = None
+    data: Optional[Union[str, dict[str, Any]]] = None
     abnormal_flags: Optional[str] = None
     doctor_id: Optional[str] = Field(None, max_length=36)
     notes: Optional[str] = None
@@ -28,7 +29,7 @@ class FollowUpUpdate(BaseModel):
     data: Optional[str] = None
     abnormal_flags: Optional[str] = None
     alert_triggered: Optional[bool] = None
-    alert_detail: Optional[str] = None
+    alert_details: Optional[str] = None
     doctor_id: Optional[str] = Field(None, max_length=36)
     notes: Optional[str] = None
 
@@ -44,7 +45,7 @@ class FollowUpResponse(BaseModel):
     data: Optional[str] = None
     abnormal_flags: Optional[str] = None
     alert_triggered: bool
-    alert_detail: Optional[str] = None
+    alert_details: Optional[str] = None
     doctor_id: Optional[str] = None
     notes: Optional[str] = None
     created_at: datetime

@@ -51,7 +51,9 @@ class Consumable(Base):
     status = Column(
         SAEnum(
             "in_stock",
+            "normal",
             "low_stock",
+            "low",
             "out_of_stock",
             "critical",
             "replenishing",
@@ -62,6 +64,9 @@ class Consumable(Base):
         nullable=False,
         default="in_stock",
     )
+    replenishment_request_id = Column(String(36), nullable=True)
+    replenishment_status = Column(String(50), nullable=True, default="none")
+    outbound_quota_locked = Column(Integer, nullable=False, default=0)
     image_url = Column(String(500), nullable=True)
     notes = Column(Text, nullable=True)
     transplant_center_id = Column(String(36), ForeignKey("transplant_centers.id"), nullable=True)

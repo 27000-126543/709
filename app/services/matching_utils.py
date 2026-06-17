@@ -130,10 +130,9 @@ def geography_score(distance_km: float, max_reference_km: float = 2000.0) -> flo
 
 
 URGENCY_SCORE_MAP = {
-    "critical": 1.0,
-    "urgent": 0.75,
-    "normal": 0.5,
-    "elective": 0.25,
+    "emergency": 1.0,
+    "priority": 0.75,
+    "routine": 0.4,
 }
 
 

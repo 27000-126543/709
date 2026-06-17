@@ -35,6 +35,7 @@ class ApprovalService:
             approver_role=approval_in.approver_role,
             status="pending",
             timeout_at=timeout_at,
+            deadline_at=timeout_at,
         )
 
         self.db.add(approval)
@@ -138,6 +139,7 @@ class ApprovalService:
                 approver_role="国家级审批员",
                 status="pending",
                 timeout_at=next_timeout,
+                deadline_at=next_timeout,
             )
             self.db.add(national_approval)
 
@@ -204,6 +206,7 @@ class ApprovalService:
                 approver_role="国家级审批员",
                 status="pending",
                 timeout_at=next_timeout,
+                deadline_at=next_timeout,
                 escalated_to_id="national_supervision",
                 comment=f"省级审批超时自动转交, 原审批ID: {approval.id}",
             )
@@ -363,6 +366,7 @@ class ApprovalService:
                 approver_role="国家级审批员",
                 status="pending",
                 timeout_at=next_timeout,
+                deadline_at=next_timeout,
                 escalated_to_id="national_supervision",
                 comment=f"手动转交原因: {escalate_reason}\n原审批ID: {approval.id}",
             )

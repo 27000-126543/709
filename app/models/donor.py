@@ -20,7 +20,19 @@ class Donor(Base):
     hla_c = Column(String(50), nullable=True)
     hla_drb1 = Column(String(50), nullable=True)
     hla_dqb1 = Column(String(50), nullable=True)
+    hla_typing = Column(Text, nullable=True)
     pra_level = Column(Float, nullable=True)
+    health_status = Column(
+        SAEnum("qualified", "conditional", "disqualified", name="donor_health_status"),
+        nullable=True,
+        default="qualified",
+    )
+    health_check_detail = Column(Text, nullable=True)
+    family_consent = Column(Boolean, default=False)
+    consent_document_url = Column(String(500), nullable=True)
+    consent_verified = Column(Boolean, default=False)
+    consent_notes = Column(Text, nullable=True)
+    hospital = Column(String(200), nullable=True)
     province = Column(String(50), nullable=True)
     city = Column(String(50), nullable=True)
     address_detail = Column(String(500), nullable=True)

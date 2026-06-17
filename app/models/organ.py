@@ -44,6 +44,7 @@ class Organ(Base):
     hla_c = Column(String(50), nullable=True)
     hla_drb1 = Column(String(50), nullable=True)
     hla_dqb1 = Column(String(50), nullable=True)
+    hla_typing = Column(Text, nullable=True)
     pra_level = Column(Float, nullable=True)
     viability_assessment = Column(String(200), nullable=True)
     viability_score = Column(Float, nullable=True)
@@ -61,6 +62,7 @@ class Organ(Base):
     status = Column(
         SAEnum(
             "available",
+            "locked",
             "allocated",
             "retrieved",
             "in_transit",

@@ -20,6 +20,7 @@ class Recipient(Base):
     hla_c = Column(String(50), nullable=True)
     hla_drb1 = Column(String(50), nullable=True)
     hla_dqb1 = Column(String(50), nullable=True)
+    hla_typing = Column(Text, nullable=True)
     pra_level = Column(Float, nullable=True)
     pra_antibodies = Column(Text, nullable=True)
     organ_type_needed = Column(
@@ -49,6 +50,7 @@ class Recipient(Base):
     city = Column(String(50), nullable=True)
     hospital = Column(String(200), nullable=True)
     doctor_in_charge = Column(String(100), nullable=True)
+    doctor_id = Column(String(36), nullable=True)
     contact_phone = Column(String(20), nullable=True)
     status = Column(
         SAEnum(

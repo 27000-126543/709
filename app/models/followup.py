@@ -64,6 +64,7 @@ class FollowUpRecord(Base):
     lab_data = Column(Text, nullable=True)
     imaging_data = Column(Text, nullable=True)
     biopsy_data = Column(Text, nullable=True)
+    data = Column(Text, nullable=True)
     immunosuppressant_dosage = Column(Text, nullable=True)
     drug_levels = Column(Text, nullable=True)
     adverse_events = Column(Text, nullable=True)

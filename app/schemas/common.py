@@ -36,9 +36,12 @@ class DonorStatus(str, Enum):
 class OrganType(str, Enum):
     heart = "heart"
     liver = "liver"
-    kidney = "kidney"
-    lung = "lung"
+    kidney_left = "kidney_left"
+    kidney_right = "kidney_right"
+    lung_left = "lung_left"
+    lung_right = "lung_right"
     pancreas = "pancreas"
+    small_intestine = "small_intestine"
     cornea = "cornea"
 
 
@@ -54,10 +57,9 @@ class OrganStatus(str, Enum):
 
 
 class UrgencyLevel(str, Enum):
-    critical = "critical"
-    urgent = "urgent"
-    normal = "normal"
-    elective = "elective"
+    emergency = "emergency"
+    priority = "priority"
+    routine = "routine"
 
 
 class RecipientStatus(str, Enum):
@@ -107,12 +109,14 @@ class ApprovalStatus(str, Enum):
     approved = "approved"
     rejected = "rejected"
     escalated = "escalated"
+    auto_escalated = "auto_escalated"
+    expired = "expired"
 
 
 class ApprovalActionType(str, Enum):
-    approve = "approve"
-    reject = "reject"
-    escalate = "escalate"
+    approved = "approved"
+    rejected = "rejected"
+    escalated = "escalated"
 
 
 class PreopCheckStatus(str, Enum):
@@ -130,16 +134,30 @@ class SurgeryStatus(str, Enum):
 
 
 class FollowUpType(str, Enum):
-    routine = "routine"
+    one_week = "one_week"
+    one_month = "one_month"
+    three_months = "three_months"
+    six_months = "six_months"
+    one_year = "one_year"
+    annual = "annual"
+    bi_annual = "bi_annual"
+    as_needed = "as_needed"
     special = "special"
     emergency = "emergency"
+    routine = "one_month"
 
 
 class ConsumableCategory(str, Enum):
     surgical = "surgical"
     preservation = "preservation"
     testing = "testing"
-    general = "general"
+    immunosuppressant = "immunosuppressant"
+    antibiotic = "antibiotic"
+    anesthesia = "anesthesia"
+    consumable_general = "consumable_general"
+    equipment = "equipment"
+    other = "other"
+    general = "consumable_general"
 
 
 class ConsumableStatus(str, Enum):
