@@ -83,16 +83,89 @@ class ApprovalRouterService:
 
         return items, total
 
+    async def _auto_escalate_if_timeout(self, approval: Approval) -> Optional[dict]:
+        now = datetime.utcnow()
+        if approval.status == "pending" and approval.timeout_at and approval.timeout_at < now:
+            approval.status = "auto_escalated"
+            approval.escalated = True
+            approval.escalated_at = now
+            approval.escalated_reason = f"审批超时(截止时间: {approval.timeout_at.isoformat()})，自动转交上一级"
+            approval.decided_at = now
+            approval.comment = (approval.comment or "") + " [系统自动转交: 审批超时]"
+
+            escalation_log = ApprovalEscalationLog(
+                approval_id=approval.id,
+                escalation_type="timeout",
+                from_level=approval.approval_level,
+                to_level="national" if approval.approval_level == "provincial" else approval.approval_level,
+                is_auto=True,
+                reason=f"审批超时自动转交，原截止时间: {approval.timeout_at.isoformat()}",
+                previous_deadline=approval.timeout_at,
+                new_deadline=now + timedelta(hours=2),
+                escalated_at=now,
+            )
+            self.db.add(escalation_log)
+
+            next_approval = None
+            if approval.approval_level == "provincial":
+                next_timeout = now + timedelta(hours=2)
+                next_approval = Approval(
+                    allocation_id=approval.allocation_id,
+                    approval_level="national",
+                    status="pending",
+                    timeout_at=next_timeout,
+                    deadline_at=next_timeout,
+                    timeout_hours=2,
+                    sequence=approval.sequence + 1 if approval.sequence else 2,
+                    comment="由省级审批超时自动转交",
+                    escalated_to_level="national",
+                )
+                self.db.add(next_approval)
+
+                allocation_result = await self.db.execute(
+                    select(Allocation).where(Allocation.id == approval.allocation_id)
+                )
+                allocation = allocation_result.scalar_one_or_none()
+                if allocation:
+                    allocation.current_approval_level = "national"
+
+            await self.db.flush()
+            await self.db.refresh(approval)
+            if next_approval:
+                await self.db.refresh(next_approval)
+
+            return {
+                "timeout": True,
+                "auto_escalated": True,
+                "original_approval_id": approval.id,
+                "original_level": approval.approval_level,
+                "next_approval_id": next_approval.id if next_approval else None,
+                "next_level": "national" if next_approval else None,
+                "next_timeout": next_approval.timeout_at.isoformat() if next_approval else None,
+                "message": "该审批已超时，系统已自动转交上一级审批，请在待办列表中查看新的审批任务",
+            }
+        return None
+
     async def process_action(self, data: ApprovalAction) -> Optional[Approval]:
         approval = await self.get_approval(data.approval_id)
         if not approval:
             return None
+
+        timeout_result = await self._auto_escalate_if_timeout(approval)
+        if timeout_result:
+            raise HTTPException(
+                status_code=409,
+                detail=timeout_result["message"],
+            )
+
         if approval.status != "pending":
             raise HTTPException(status_code=400, detail=f"审批状态为 {approval.status}，无法操作")
 
-        if data.action == "approve":
+        if data.action == "approved":
             approval.status = "approved"
             approval.comment = data.comment
+            approval.decided_at = datetime.utcnow()
+            approval.approver_id = data.approver_id
 
             allocation_result = await self.db.execute(
                 select(Allocation).where(Allocation.id == approval.allocation_id)
@@ -102,13 +175,28 @@ class ApprovalRouterService:
                 if approval.approval_level == "provincial":
                     allocation.status = "provincial_approved"
                     allocation.current_approval_level = "provincial"
+
+                    next_timeout = datetime.utcnow() + timedelta(hours=2)
+                    national_approval = Approval(
+                        allocation_id=approval.allocation_id,
+                        approval_level="national",
+                        status="pending",
+                        timeout_at=next_timeout,
+                        deadline_at=next_timeout,
+                        timeout_hours=2,
+                        sequence=approval.sequence + 1 if approval.sequence else 2,
+                        comment="省级审批通过，自动提交国家级审批",
+                    )
+                    self.db.add(national_approval)
                 elif approval.approval_level == "national":
                     allocation.status = "national_approved"
                     allocation.current_approval_level = "national"
 
-        elif data.action == "reject":
+        elif data.action == "rejected":
             approval.status = "rejected"
             approval.comment = data.comment
+            approval.decided_at = datetime.utcnow()
+            approval.approver_id = data.approver_id
 
             allocation_result = await self.db.execute(
                 select(Allocation).where(Allocation.id == approval.allocation_id)
@@ -117,7 +205,7 @@ class ApprovalRouterService:
             if allocation:
                 allocation.status = "rejected"
 
-        elif data.action == "escalate":
+        elif data.action == "escalated":
             approval.status = "escalated"
             approval.escalated_at = datetime.utcnow()
             approval.comment = data.comment

@@ -6,7 +6,7 @@ from datetime import datetime
 import json
 import uuid
 
-from app.models import Consumable
+from app.models import Consumable, ReplenishmentRequest, ConsumableTransaction
 from app.schemas.consumable import (
     ConsumableCreate,
     ConsumableUpdate,
@@ -154,25 +154,59 @@ class ConsumableService:
         consumable: Consumable,
         quantity: int,
     ) -> Dict:
-        request_id = uuid.uuid4().hex
+        existing = await self.db.execute(
+            select(ReplenishmentRequest).where(
+                ReplenishmentRequest.consumable_id == consumable.id,
+                ReplenishmentRequest.status.in_(["submitted", "under_review", "approved", "ordered", "shipped"]),
+            )
+        )
+        if existing.scalar_one_or_none():
+            return {"replenishment_request_id": None, "skipped": True, "reason": "已有进行中的补货申请"}
 
-        consumable.replenishment_request_id = request_id
-        consumable.replenishment_status = "pending"
+        urgency = "routine"
+        available = consumable.stock_quantity - consumable.outbound_quota_locked
+        if available <= consumable.safety_stock_level * 0.3:
+            urgency = "emergency"
+        elif available <= consumable.safety_stock_level * 0.6:
+            urgency = "urgent"
+
+        request = ReplenishmentRequest(
+            consumable_id=consumable.id,
+            request_code=f"AUTO-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}",
+            requested_quantity=quantity,
+            current_stock=consumable.stock_quantity,
+            safety_stock=consumable.safety_stock_level,
+            urgency_level=urgency,
+            supplier=consumable.supplier,
+            estimated_cost=quantity * (consumable.unit_price or 0),
+            status="submitted",
+            requested_by="auto_system",
+            reason=f"安全库存自动补货: 现有{consumable.stock_quantity}{consumable.unit}, 安全水位{consumable.safety_stock_level}{consumable.unit}, 可用{available}{consumable.unit}",
+        )
+
+        self.db.add(request)
+        await self.db.flush()
+        await self.db.refresh(request)
+
+        consumable.replenishment_request_id = request.id
+        consumable.replenishment_status = "replenishing"
 
         await self.db.flush()
         await self.db.refresh(consumable)
 
         return {
-            "replenishment_request_id": request_id,
+            "replenishment_request_id": request.id,
+            "request_code": request.request_code,
             "consumable_id": consumable.id,
             "consumable_name": consumable.name,
             "requested_quantity": quantity,
-            "status": "pending",
+            "status": request.status,
+            "urgency_level": urgency,
             "supplier": consumable.supplier,
             "unit_price": consumable.unit_price,
-            "estimated_cost": quantity * (consumable.unit_price or 0),
-            "reason": f"安全库存自动补货: 现有{consumable.stock_quantity}{consumable.unit}, 安全水位{consumable.safety_stock_level}{consumable.unit}",
-            "created_at": datetime.utcnow().isoformat(),
+            "estimated_cost": request.estimated_cost,
+            "reason": request.reason,
+            "created_at": request.created_at.isoformat() if request.created_at else None,
         }
 
     async def check_all_safety_stocks(self) -> List[Dict]:

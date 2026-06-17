@@ -109,17 +109,17 @@ class ConsumableRouterService:
         existing = await self.db.execute(
             select(ReplenishmentRequest).where(
                 ReplenishmentRequest.consumable_id == data.consumable_id,
-                ReplenishmentRequest.status.in_(["pending", "approved", "procuring"]),
+                ReplenishmentRequest.status.in_(["submitted", "under_review", "approved", "ordered", "shipped"]),
             )
         )
         if existing.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="该耗材已有进行中的补货申请")
 
         request = ReplenishmentRequest(**data.model_dump(exclude_none=True))
-        request.status = "pending"
+        request.status = "submitted"
         self.db.add(request)
 
-        consumable.replenishment_status = "pending"
+        consumable.replenishment_status = "replenishing"
         consumable.status = "replenishing"
 
         await self.db.flush()
@@ -165,17 +165,19 @@ class ConsumableRouterService:
         for key, value in update_data.items():
             setattr(request, key, value)
 
-        if data.status == "arrived" and data.actual_quantity:
+        if data.status == "received" and data.received_quantity:
             consumable = await self.get_consumable(request.consumable_id)
             if consumable:
-                consumable.stock_quantity += data.actual_quantity
-                consumable.replenishment_status = "none"
-                if consumable.stock_quantity > consumable.safety_stock_level:
+                consumable.stock_quantity += data.received_quantity
+                consumable.replenishment_status = "completed"
+                if consumable.stock_quantity >= consumable.safety_stock_level:
                     consumable.status = "normal"
+                else:
+                    consumable.status = "low"
                 transaction = ConsumableTransaction(
                     consumable_id=request.consumable_id,
                     transaction_type="replenishment",
-                    quantity=data.actual_quantity,
+                    quantity=data.received_quantity,
                     reference_id=str(request.id),
                     notes=f"补货入库, 申请单ID: {request.id}",
                 )
