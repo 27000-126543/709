@@ -23,7 +23,7 @@ class RecipientCreate(BaseModel):
     pra_level: Optional[float] = Field(None, ge=0, le=100)
     pra_antibodies: Optional[str] = None
     organ_type_needed: OrganType
-    urgency_level: UrgencyLevel = UrgencyLevel.normal
+    urgency_level: UrgencyLevel = UrgencyLevel.routine
     waiting_since: Optional[datetime] = None
     province: Optional[str] = Field(None, max_length=50)
     city: Optional[str] = Field(None, max_length=50)
@@ -43,15 +43,15 @@ class RecipientUpdate(BaseModel):
     hla_typing: Optional[str] = None
     pra_level: Optional[float] = Field(None, ge=0, le=100)
     pra_antibodies: Optional[str] = None
-    organ_type_needed: Optional[OrganType] = None
-    urgency_level: Optional[UrgencyLevel] = None
+    organ_type_needed: OrganType
+    urgency_level: UrgencyLevel
     waiting_since: Optional[datetime] = None
     province: Optional[str] = Field(None, max_length=50)
     city: Optional[str] = Field(None, max_length=50)
     hospital: Optional[str] = Field(None, max_length=200)
     transplant_center_id: Optional[str] = Field(None, max_length=36)
     doctor_id: Optional[str] = Field(None, max_length=36)
-    status: Optional[RecipientStatus] = None
+    status: RecipientStatus] = None
 
 
 class RecipientResponse(BaseModel):
@@ -67,7 +67,7 @@ class RecipientResponse(BaseModel):
     pra_level: Optional[float] = None
     pra_antibodies: Optional[str] = None
     organ_type_needed: OrganType
-    urgency_level: UrgencyLevel
+    urgency_level: UrgencyLevel = UrgencyLevel.routine
     waiting_since: Optional[datetime] = None
     province: Optional[str] = None
     city: Optional[str] = None
@@ -85,5 +85,5 @@ class WaitingListAdd(BaseModel):
 
     recipient_id: str = Field(..., max_length=36)
     organ_type_needed: OrganType
-    urgency_level: UrgencyLevel
+    urgency_level: UrgencyLevel = UrgencyLevel.routine
     waiting_since: datetime = Field(default_factory=datetime.utcnow)
